@@ -52,13 +52,12 @@ const Cpu = struct {
     }
 
     pub fn run(self: *Cpu) !void {
-        var mem_stream = std.io.fixedBufferStream(self.memory);
-        mem_stream.seekTo(self.pc) catch unreachable;
-        const mem_reader = mem_stream.reader();
-
         // TEMP
-        while (true) : (self.pc = @intCast(u16, mem_stream.pos)) {
-            const opcode = try mem_reader.readByte();
+        while (true) {
+            // For debug printing below
+            const pc = self.pc;
+
+            const opcode = self.next(u8);
             const op = insts.op_table[opcode] orelse return error.InvalidOpcode;
             const addr_mode = insts.addr_mode_table[opcode] orelse return error.InvalidOpcode;
 
@@ -72,27 +71,27 @@ const Cpu = struct {
                 //    addressing: abs(x|y), ind(x|y), zp(x|y)
                 //    implied: acc, impl
                 .acc => .impl,
-                .abs => .{ .addr = try mem_reader.readIntLittle(u16) },
-                .abs_x => .{ .addr = self.x + try mem_reader.readIntLittle(u16) },
-                .abs_y => .{ .addr = self.y + try mem_reader.readIntLittle(u16) },
-                .imm => .{ .imm = try mem_reader.readByte() },
+                .abs => .{ .addr = self.next(u16) },
+                .abs_x => .{ .addr = self.x + self.next(u16) },
+                .abs_y => .{ .addr = self.y + self.next(u16) },
+                .imm => .{ .imm = self.next(u8) },
                 .impl => .impl,
                 .ind => blk: {
-                    const ind_addr = try mem_reader.readIntLittle(u16);
+                    const ind_addr = self.next(u16);
                     break :blk .{ .addr = mem.readIntSliceLittle(u16, self.memory[ind_addr .. ind_addr + 1]) };
                 },
                 .x_ind => blk: {
-                    const ind_addr = self.x +% try mem_reader.readByte();
+                    const ind_addr = self.x +% self.next(u8);
                     break :blk .{ .addr = mem.readIntSliceLittle(u16, self.memory[ind_addr .. ind_addr + 1]) };
                 },
                 .ind_y => blk: {
-                    const ind_addr = try mem_reader.readByte();
+                    const ind_addr = self.next(u8);
                     break :blk .{ .addr = self.y + mem.readIntSliceLittle(u16, self.memory[ind_addr .. ind_addr + 1]) };
                 },
-                .rel => .{ .imm = try mem_reader.readByte() },
-                .zp => .{ .addr = try mem_reader.readByte() },
-                .zp_x => .{ .addr = self.x +% try mem_reader.readByte() },
-                .zp_y => .{ .addr = self.y +% try mem_reader.readByte() },
+                .rel => .{ .imm = self.next(u8) },
+                .zp => .{ .addr = self.next(u8) },
+                .zp_x => .{ .addr = self.next(u8) +% self.x },
+                .zp_y => .{ .addr = self.next(u8) +% self.y },
             };
 
             // to print if instruction was handled
@@ -134,9 +133,9 @@ const Cpu = struct {
                     self.sr.negative = @boolToInt(target.* & 0x80 != 0);
                     self.sr.zero = @boolToInt(target.* == 0);
                 },
-                .bcc => if (self.sr.carry == 0) try mem_stream.seekBy(@bitCast(i8, operand.imm)),
-                .bcs => if (self.sr.carry == 1) try mem_stream.seekBy(@bitCast(i8, operand.imm)),
-                .beq => if (self.sr.zero == 1) try mem_stream.seekBy(@bitCast(i8, operand.imm)),
+                .bcc => if (self.sr.carry == 0) self.jumpBy(operand.imm),
+                .bcs => if (self.sr.carry == 1) self.jumpBy(operand.imm),
+                .beq => if (self.sr.zero == 1) self.jumpBy(operand.imm),
                 // .bit,
                 // .bmi,
                 // .bne,
@@ -206,16 +205,16 @@ const Cpu = struct {
                 // .inc,
                 // .inx,
                 // .iny,
-                .jmp => try mem_stream.seekTo(operand.addr),
+                .jmp => self.pc = operand.addr,
                 .jsr => {
                     const sp = stack_bottom + @intCast(u16, self.sp);
                     mem.writeIntSliceLittle(
                         u16,
                         self.memory[sp - 1 .. sp + 1],
-                        self.pc + 3,
+                        self.pc,
                     );
                     self.sp -%= 2;
-                    try mem_stream.seekTo(operand.addr);
+                    self.pc = operand.addr;
                 },
                 .lda => {
                     self.a = switch (operand) {
@@ -281,7 +280,7 @@ const Cpu = struct {
                     const sp = stack_bottom + @intCast(u16, self.sp);
                     const ret_addr = mem.readIntSliceLittle(u16, self.memory[sp + 1 .. sp + 3]);
                     self.sp +%= 2;
-                    try mem_stream.seekTo(ret_addr);
+                    self.pc = ret_addr;
                 },
                 .sbc => {
                     const val = switch (operand) {
@@ -332,6 +331,7 @@ const Cpu = struct {
             // Debug printing
             {
                 if (opcode != 0xaa and opcode != 0) {
+                    print("0x{x:0<4}: ", .{pc});
                     if (have_op)
                         print("[✓] ", .{})
                     else
@@ -385,6 +385,19 @@ const Cpu = struct {
                 }
             }
         }
+    }
+
+    fn next(self: *Cpu, comptime T: type) T {
+        const size = @sizeOf(T);
+        defer self.pc += size;
+        return mem.readIntSliceLittle(T, self.memory[self.pc .. self.pc + size]);
+    }
+
+    fn jumpBy(self: *Cpu, delta: u8) void {
+        if (delta & 0x80 == 0)
+            self.pc += delta
+        else
+            self.pc -= ~delta +% 1;
     }
 
     fn carry(self: *Cpu) u1 {
