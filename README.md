@@ -5,9 +5,8 @@ Reads and runs assembled [6502](https://en.wikipedia.org/wiki/MOS_Technology_650
 ![demo](demo.png)
 
 ## To do
-- Implement rest of operations
 - Run more test programs
-- Figure out interrupts
+- Figure out interrupts, implement BRK and RTI
 - Proper CLI interface
 - Factor out disassembler as separate module
 - Do a cool virtual display driver like [skilldrick](https://github.com/skilldrick/6502js) did

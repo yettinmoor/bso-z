@@ -1,7 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
-const readInt = mem.readIntSliceLittle;
 const print = std.debug.print;
 
 const Inst = @import("Inst.zig");
@@ -12,21 +11,28 @@ const Cpu = struct {
     x: u8,
     y: u8,
     sp: u8,
-    sr: struct { // NVssDIZC
-        carry: u1,
-        zero: u1,
-        interrupt_disable: u1,
-        decimal: u1,
-        @"break": u1,
-        overflow: u1,
-        negative: u1,
-    },
+    sr: StatusRegister,
 
     memory: []u8,
     entry_point: u16,
 
     const stack_top = 0x0200;
     const stack_bottom = 0x0100;
+
+    const StatusRegister = packed struct { // NVsBDIZC
+        carry: u1,
+        zero: u1,
+        interrupt_disable: u1,
+        decimal: u1,
+        @"break": u1,
+        _: u1 = 0,
+        overflow: u1,
+        negative: u1,
+
+        pub fn asByte(self: @This()) u8 {
+            return @bitCast(u8, self);
+        }
+    };
 
     pub fn init(memory: []u8, entry_point: u16) Cpu {
         var cpu: Cpu = undefined;
@@ -126,7 +132,7 @@ const Cpu = struct {
                     .addr => |addr| self.memory[addr],
                     else => unreachable,
                 };
-                self.a |= val;
+                self.a &= val;
                 self.sr.negative = @boolToInt(self.a & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.a == 0);
             },
@@ -143,21 +149,29 @@ const Cpu = struct {
             .bcc => if (self.sr.carry == 0) self.jumpBy(operand.rel),
             .bcs => if (self.sr.carry == 1) self.jumpBy(operand.rel),
             .beq => if (self.sr.zero == 1) self.jumpBy(operand.rel),
-            // .bit,
-            // .bmi,
-            // .bne,
-            // .bpl,
+            .bit => {
+                // N receives the initial, un-ANDed value of memory bit 7.
+                // V receives the initial, un-ANDed value of memory bit 6.
+                // Z is set if the result of the AND is zero, otherwise reset.
+                const val = self.memory[operand.addr];
+                self.sr.negative = @boolToInt(val & 0x80 != 0);
+                self.sr.overflow = @boolToInt(val & 0x40 != 0);
+                self.sr.zero = @boolToInt(self.a & val == 0);
+            },
+            .bmi => if (self.sr.negative == 1) self.jumpBy(operand.rel),
+            .bne => if (self.sr.zero == 0) self.jumpBy(operand.rel),
+            .bpl => if (self.sr.negative == 0) self.jumpBy(operand.rel),
             // .brk,
-            // .bvc,
-            // .bvs,
+            .bvc => if (self.sr.overflow == 0) self.jumpBy(operand.rel),
+            .bvs => if (self.sr.overflow == 1) self.jumpBy(operand.rel),
             .clc => self.sr.carry = 0,
-            // .cld,
-            // .cli,
-            // .clv,
-            // reg < memory => N
-            // reg = memory => ZC
-            // reg > memory => C
+            .cld => self.sr.decimal = 0,
+            .cli => self.sr.interrupt_disable = 0,
+            .clv => self.sr.overflow = 0,
             .cmp, .cpx, .cpy => {
+                // reg < memory => N
+                // reg = memory => ZC
+                // reg > memory => C
                 const val = switch (operand) {
                     .imm => |imm| imm,
                     .addr => |addr| self.memory[addr],
@@ -206,21 +220,28 @@ const Cpu = struct {
                     else => unreachable,
                 };
                 self.a ^= val;
+                self.sr.negative = @boolToInt(self.a & 0x80 != 0);
+                self.sr.zero = @boolToInt(self.a == 0);
+            },
+            .inc => {
+                self.memory[operand.addr] += 1;
+                const val = self.memory[operand.addr];
+                self.sr.negative = @boolToInt(val & 0x80 != 0);
+                self.sr.zero = @boolToInt(val == 0);
+            },
+            .inx => {
+                self.x += 1;
+                self.sr.negative = @boolToInt(self.x & 0x80 != 0);
+                self.sr.zero = @boolToInt(self.x == 0);
+            },
+            .iny => {
+                self.y += 1;
                 self.sr.negative = @boolToInt(self.y & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.y == 0);
             },
-            // .inc,
-            // .inx,
-            // .iny,
             .jmp => self.pc = operand.addr,
             .jsr => {
-                const sp = stack_bottom + @intCast(u16, self.sp);
-                mem.writeIntSliceLittle(
-                    u16,
-                    self.memory[sp - 1 .. sp + 1],
-                    self.pc,
-                );
-                self.sp -%= 2;
+                self.push(u16, self.pc - 1); // rts pulls this addr and sets pc to it + 1
                 self.pc = operand.addr;
             },
             .lda => {
@@ -265,12 +286,36 @@ const Cpu = struct {
                 self.sr.zero = @boolToInt(target.* == 0);
             },
             .nop => {},
-            // .ora,
-            // .pha,
-            // .php,
-            // .pla,
-            // .plp,
-            // .rol,
+            .ora => {
+                const val = switch (operand) {
+                    .imm => |imm| imm,
+                    .addr => |addr| self.memory[addr],
+                    else => unreachable,
+                };
+                self.a |= val;
+                self.sr.negative = @boolToInt(self.a & 0x80 != 0);
+                self.sr.zero = @boolToInt(self.a == 0);
+            },
+            .pha => self.push(u8, self.a),
+            .php => self.push(u8, self.sr.asByte()),
+            .pla => {
+                self.a = self.pull(u8);
+                self.sr.negative = @boolToInt(self.a & 0x80 != 0);
+                self.sr.zero = @boolToInt(self.a == 0);
+            },
+            .plp => self.sr = @bitCast(StatusRegister, self.pull(u8)),
+            .rol => {
+                const target = switch (operand) {
+                    .addr => |addr| &self.memory[addr],
+                    .impl => &self.a,
+                    else => unreachable,
+                };
+                const is_carry = @boolToInt(@shlWithOverflow(u8, target.*, 1, target));
+                target.* |= self.carry();
+                self.sr.carry = is_carry;
+                self.sr.negative = @boolToInt(target.* & 0x80 != 0);
+                self.sr.zero = @boolToInt(target.* == 0);
+            },
             .ror => {
                 const target = switch (operand) {
                     .addr => |addr| &self.memory[addr],
@@ -279,7 +324,6 @@ const Cpu = struct {
                 };
                 const is_carry = @truncate(u1, target.*);
                 target.* = (target.* >> 1);
-                if (self.carry() == 1) target.* |= 0x80;
                 self.sr.carry = is_carry;
                 self.sr.negative = @boolToInt(target.* & 0x80 != 0);
                 self.sr.zero = @boolToInt(target.* == 0);
@@ -288,10 +332,7 @@ const Cpu = struct {
             .rts => {
                 if (self.sp == 0xff)
                     return error.StackUnderflowReturnFromSubroutine;
-                const sp = stack_bottom + @intCast(u16, self.sp);
-                const ret_addr = readInt(u16, self.memory[sp + 1 .. sp + 3]);
-                self.sp +%= 2;
-                self.pc = ret_addr;
+                self.pc = self.pull(u16) + 1;
             },
             .sbc => {
                 const val = switch (operand) {
@@ -307,9 +348,9 @@ const Cpu = struct {
                 self.sr.zero = @boolToInt(self.a == 0);
                 self.sr.overflow = @boolToInt(sign != (self.a & 0x80));
             },
-            // .sec,
-            // .sed,
-            // .sei,
+            .sec => self.sr.carry = 1,
+            .sed => self.sr.decimal = 1,
+            .sei => self.sr.interrupt_disable = 1,
             .sta => {
                 self.memory[operand.addr] = self.a;
             },
@@ -324,19 +365,27 @@ const Cpu = struct {
                 self.sr.negative = @boolToInt(self.x & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.x == 0);
             },
-            // .tsx,
+            .tsx => {
+                self.x = self.sp;
+                self.sr.negative = @boolToInt(self.x & 0x80 != 0);
+                self.sr.zero = @boolToInt(self.x == 0);
+            },
             .txa => {
                 self.a = self.x;
                 self.sr.negative = @boolToInt(self.a & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.a == 0);
             },
-            // .txs,
+            .txs => {
+                self.sp = self.x;
+                self.sr.negative = @boolToInt(self.sp & 0x80 != 0);
+                self.sr.zero = @boolToInt(self.sp == 0);
+            },
             .tya => {
                 self.a = self.y;
                 self.sr.negative = @boolToInt(self.a & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.a == 0);
             },
-            else => print("TODO ", .{}),
+            else => {}, // TODO: brk, rti
         }
     }
 
@@ -399,22 +448,23 @@ const Cpu = struct {
 
         print("\n", .{});
 
-        // if (inst.op == .jsr or inst.op == .rts) {
-        //     print("\t[ ", .{});
-        //     for (self.memory[0x1f0..0x200]) |s, i| {
-        //         if (i + 0xf0 == self.sp)
-        //             print("<{x:0<2}> ", .{s})
-        //         else
-        //             print("{x:0<2} ", .{s});
-        //     }
-        //     print("]\n", .{});
-        // }
+        if (inst.op == .jsr or inst.op == .rts) {
+            print("\t[ ", .{});
+            for (self.memory[0x1f0..0x200]) |s, i| {
+                if (i + 0xf0 == self.sp)
+                    print("<{x:0<2}> ", .{s})
+                else
+                    print("{x:0<2} ", .{s});
+            }
+            print("]\n", .{});
+        }
     }
 
+    // TODO: figure out if PC should only be incremented at the end of the instruction?
     fn next(self: *Cpu, comptime T: type) T {
         const size = @sizeOf(T);
         defer self.pc += size;
-        return readInt(T, self.memory[self.pc .. self.pc + size]);
+        return mem.readIntSliceLittle(T, self.memory[self.pc .. self.pc + size]);
     }
 
     fn resolveAddress(self: Cpu, inst: Inst) u16 {
@@ -423,13 +473,28 @@ const Cpu = struct {
             .abs, .zp => addr,
             .abs_x => self.x + addr,
             .abs_y => self.y + addr,
-            .ind => readInt(u16, self.memory[addr .. addr + 1]),
-            .x_ind => readInt(u16, self.memory[(addr +% self.x) .. addr +% self.x +% 1]),
-            .ind_y => self.y + readInt(u16, self.memory[addr .. addr + 1]),
+            .ind => mem.readIntSliceLittle(u16, self.memory[addr .. addr + 1]),
+            .x_ind => mem.readIntSliceLittle(u16, self.memory[(addr +% self.x) .. addr +% self.x +% 1]),
+            .ind_y => self.y + mem.readIntSliceLittle(u16, self.memory[addr .. addr + 1]),
             .zp_x => self.x +% addr,
             .zp_y => self.y +% addr,
             else => unreachable,
         };
+    }
+
+    fn push(self: *Cpu, comptime T: type, value: T) void {
+        const sp = stack_bottom + @intCast(u16, self.sp);
+        const size = @sizeOf(T);
+        // writeIntSlice can't handle u8 apparently
+        mem.writeIntSliceLittle(u16, self.memory[sp - 1 .. sp + (size - 1)], value);
+        self.sp -%= size;
+    }
+
+    fn pull(self: *Cpu, comptime T: type) T {
+        const sp = stack_bottom + @intCast(u16, self.sp);
+        const size = @sizeOf(T);
+        defer self.sp +%= size;
+        return mem.readIntSliceLittle(T, self.memory[sp + 1 .. sp + 1 + size]);
     }
 
     fn jumpBy(self: *Cpu, delta: u8) void {
