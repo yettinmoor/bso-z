@@ -392,10 +392,10 @@ const Cpu = struct {
     /// For debug printing
     pub fn printState(self: *Cpu, inst: Inst) void {
         // PC
-        print("  0x{x:0<4}:  ", .{self.pc - inst.len});
+        print("{x:0<4}: ", .{self.pc - inst.len});
 
         // Op
-        print("{} ", .{inst.op.name()});
+        print("\x1b[33m{}\x1b[0m ", .{inst.op.name()});
 
         // Addressing mode and operand
         const operand = inst.operand;
@@ -419,7 +419,7 @@ const Cpu = struct {
                 .zp_y => writer.print("${x:0<2},Y", .{operand.addr}),
             };
             ok catch unreachable;
-            print("{: <10}", .{fbs.getWritten()});
+            print("\x1b[34m{: <10}\x1b[0m", .{fbs.getWritten()});
         }
 
         // Dereference address
@@ -431,14 +431,14 @@ const Cpu = struct {
             else => print("        ", .{}),
         }
 
-        // Register status
-        print("  | A: 0x{x:0<2} | X: 0x{x:0<2} | Y: 0x{x:0<2} | SP: 0x{x:0<2} | ", .{
-            self.a,
-            self.x,
-            self.y,
-            self.sp,
-        });
+        // Registers
+        print(" | ", .{});
+        print("{}A{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.a });
+        print("{}X{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.x });
+        print("{}Y{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.y });
+        print("{}SP{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.sp });
 
+        // Status register
         if (self.sr.negative == 1) print("N", .{}) else print("-", .{});
         if (self.sr.overflow == 1) print("V", .{}) else print("-", .{});
         if (self.sr.zero == 1) print("Z", .{}) else print("-", .{});
@@ -446,18 +446,9 @@ const Cpu = struct {
 
         print(" | ", .{});
 
-        print("\n", .{});
+        // TODO: pretty-print the stack somehow
 
-        if (inst.op == .jsr or inst.op == .rts) {
-            print("\t[ ", .{});
-            for (self.memory[0x1f0..0x200]) |s, i| {
-                if (i + 0xf0 == self.sp)
-                    print("<{x:0<2}> ", .{s})
-                else
-                    print("{x:0<2} ", .{s});
-            }
-            print("]\n", .{});
-        }
+        print("\n", .{});
     }
 
     // TODO: figure out if PC should only be incremented at the end of the instruction?
