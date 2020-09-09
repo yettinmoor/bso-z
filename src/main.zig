@@ -57,7 +57,7 @@ pub const Cpu = struct {
 
     pub fn run(self: *Cpu, opts: RunOptions) Error!void {
         while (true) {
-            const inst = try self.fetch();
+            const inst = try Inst.fetch(self.memory[self.pc..]);
             defer if (opts.print != .no) {
                 self.printState(inst, opts);
             };
@@ -70,34 +70,9 @@ pub const Cpu = struct {
         }
     }
 
-    /// Fetch the next instruction, advancing the program counter
-    pub fn fetch(self: *Cpu) Error!Inst {
-        const opcode = self.read(u8, self.pc);
-        var inst = try Inst.new(opcode);
-        inst.operand = switch (inst.addr_mode) {
-            .acc, .impl => .impl,
-            .imm => .{ .imm = self.read(u8, self.pc + 1) },
-            .rel => .{ .rel = self.read(u8, self.pc + 1) },
-
-            .abs,
-            .abs_x,
-            .abs_y,
-            .ind,
-            .x_ind,
-            .ind_y,
-            => .{ .addr = self.read(u16, self.pc + 1) },
-
-            .zp,
-            .zp_x,
-            .zp_y,
-            => .{ .addr = self.read(u8, self.pc + 1) },
-        };
-        return inst;
-    }
-
     /// Run ONE instruction
     pub fn step(self: *Cpu, inst: Inst) Error!void {
-        defer self.pc += inst.len;
+        defer self.pc += inst.size();
         const op = inst.op;
 
         // Addresses must be recalculated in the case of certain addressing modes.
@@ -237,10 +212,10 @@ pub const Cpu = struct {
                 self.sr.negative = @boolToInt(self.y & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.y == 0);
             },
-            .jmp => self.pc = operand.addr - inst.len,
+            .jmp => self.pc = operand.addr - inst.size(),
             .jsr => {
-                self.push(u16, self.pc + inst.len - 1); // rts pulls this addr and adds 1
-                self.pc = operand.addr - inst.len;
+                self.push(u16, self.pc + inst.size() - 1); // rts pulls this addr and adds 1
+                self.pc = operand.addr - inst.size();
             },
             .lda => {
                 self.a = switch (operand) {
@@ -384,7 +359,7 @@ pub const Cpu = struct {
     /// For debug printing
     pub fn printState(self: *Cpu, inst: Inst, opts: RunOptions) void {
         // PC
-        print("{x:0<4}: ", .{self.pc - inst.len});
+        print("{x:0<4}: ", .{self.pc - inst.size()});
 
         // Op
         if (opts.print == .yes_color)
