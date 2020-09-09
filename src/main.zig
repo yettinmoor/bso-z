@@ -29,8 +29,12 @@ const Cpu = struct {
         overflow: u1,
         negative: u1,
 
-        pub fn asByte(self: @This()) u8 {
+        fn asByte(self: StatusRegister) u8 {
             return @bitCast(u8, self);
+        }
+
+        fn set(self: *StatusRegister, val: u8) void {
+            self.* = @bitCast(StatusRegister, val);
         }
     };
 
@@ -48,21 +52,13 @@ const Cpu = struct {
         self.x = 0;
         self.y = 0;
         self.sp = 0xff;
-        self.sr = .{
-            .carry = 0,
-            .zero = 0,
-            .interrupt_disable = 0,
-            .decimal = 0,
-            .@"break" = 0,
-            .overflow = 0,
-            .negative = 0,
-        };
+        self.sr.set(0);
     }
 
     pub fn run(self: *Cpu) Error!void {
         while (true) {
             const inst = try self.fetch();
-            self.printState(inst);
+            defer self.printState(inst);
             self.step(inst) catch |err| switch (err) {
                 // TODO: for now, we exit when returning from a subroutine
                 // when no return address is on the stack
@@ -74,13 +70,12 @@ const Cpu = struct {
 
     /// Fetch the next instruction, advancing the program counter
     pub fn fetch(self: *Cpu) Error!Inst {
-        const pc = self.pc;
-        const opcode = self.next(u8);
+        const opcode = self.read(u8, self.pc);
         var inst = try Inst.new(opcode);
         inst.operand = switch (inst.addr_mode) {
             .acc, .impl => .impl,
-            .imm => .{ .imm = self.next(u8) },
-            .rel => .{ .rel = self.next(u8) },
+            .imm => .{ .imm = self.read(u8, self.pc + 1) },
+            .rel => .{ .rel = self.read(u8, self.pc + 1) },
 
             .abs,
             .abs_x,
@@ -88,23 +83,24 @@ const Cpu = struct {
             .ind,
             .x_ind,
             .ind_y,
-            => .{ .addr = self.next(u16) },
+            => .{ .addr = self.read(u16, self.pc + 1) },
 
             .zp,
             .zp_x,
             .zp_y,
-            => .{ .addr = self.next(u8) },
+            => .{ .addr = self.read(u8, self.pc + 1) },
         };
-        assert(self.pc == pc + inst.len);
         return inst;
     }
 
     /// Run ONE instruction
     pub fn step(self: *Cpu, inst: Inst) Error!void {
+        defer self.pc += inst.len;
         const op = inst.op;
 
         // Addresses must be recalculated in the case of certain addressing modes.
         // We don't do this when fetching in order to preserve the original disassembly
+        // for other use cases, e.g. printing.
         const operand: Inst.Operand = switch (inst.operand) {
             .addr => .{ .addr = self.resolveAddress(inst) },
             else => inst.operand,
@@ -239,10 +235,10 @@ const Cpu = struct {
                 self.sr.negative = @boolToInt(self.y & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.y == 0);
             },
-            .jmp => self.pc = operand.addr,
+            .jmp => self.pc = operand.addr - inst.len,
             .jsr => {
-                self.push(u16, self.pc - 1); // rts pulls this addr and sets pc to it + 1
-                self.pc = operand.addr;
+                self.push(u16, self.pc + inst.len - 1); // rts pulls this addr and adds 1
+                self.pc = operand.addr - inst.len;
             },
             .lda => {
                 self.a = switch (operand) {
@@ -303,7 +299,7 @@ const Cpu = struct {
                 self.sr.negative = @boolToInt(self.a & 0x80 != 0);
                 self.sr.zero = @boolToInt(self.a == 0);
             },
-            .plp => self.sr = @bitCast(StatusRegister, self.pull(u8)),
+            .plp => self.sr.set(self.pull(u8)),
             .rol => {
                 const target = switch (operand) {
                     .addr => |addr| &self.memory[addr],
@@ -332,7 +328,7 @@ const Cpu = struct {
             .rts => {
                 if (self.sp == 0xff)
                     return error.StackUnderflowReturnFromSubroutine;
-                self.pc = self.pull(u16) + 1;
+                self.pc = self.pull(u16);
             },
             .sbc => {
                 const val = switch (operand) {
@@ -351,15 +347,9 @@ const Cpu = struct {
             .sec => self.sr.carry = 1,
             .sed => self.sr.decimal = 1,
             .sei => self.sr.interrupt_disable = 1,
-            .sta => {
-                self.memory[operand.addr] = self.a;
-            },
-            .stx => {
-                self.memory[operand.addr] = self.x;
-            },
-            .sty => {
-                self.memory[operand.addr] = self.y;
-            },
+            .sta => self.memory[operand.addr] = self.a,
+            .stx => self.memory[operand.addr] = self.x,
+            .sty => self.memory[operand.addr] = self.y,
             .tax => {
                 self.x = self.a;
                 self.sr.negative = @boolToInt(self.x & 0x80 != 0);
@@ -451,11 +441,9 @@ const Cpu = struct {
         print("\n", .{});
     }
 
-    // TODO: figure out if PC should only be incremented at the end of the instruction?
-    fn next(self: *Cpu, comptime T: type) T {
+    fn read(self: Cpu, comptime T: type, addr: u16) T {
         const size = @sizeOf(T);
-        defer self.pc += size;
-        return mem.readIntSliceLittle(T, self.memory[self.pc .. self.pc + size]);
+        return mem.readIntSliceLittle(T, self.memory[addr .. addr + size]);
     }
 
     fn resolveAddress(self: Cpu, inst: Inst) u16 {
@@ -464,9 +452,9 @@ const Cpu = struct {
             .abs, .zp => addr,
             .abs_x => self.x + addr,
             .abs_y => self.y + addr,
-            .ind => mem.readIntSliceLittle(u16, self.memory[addr .. addr + 1]),
-            .x_ind => mem.readIntSliceLittle(u16, self.memory[(addr +% self.x) .. addr +% self.x +% 1]),
-            .ind_y => self.y + mem.readIntSliceLittle(u16, self.memory[addr .. addr + 1]),
+            .ind => self.read(u16, addr),
+            .x_ind => self.read(u16, addr +% self.x),
+            .ind_y => self.y + self.read(u16, addr),
             .zp_x => self.x +% addr,
             .zp_y => self.y +% addr,
             else => unreachable,
