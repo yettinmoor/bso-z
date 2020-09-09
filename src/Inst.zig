@@ -16,9 +16,22 @@ pub const Operand = union(enum) {
 
 pub inline fn size(inst: Inst) u8 {
     return 1 + switch (inst.addr_mode) {
-        .acc, .impl => @as(u8, 0),
-        .imm, .rel, .zp, .zp_x, .zp_y => @as(u8, 1),
-        .abs, .abs_x, .abs_y, .ind, .x_ind, .ind_y => @as(u8, 2),
+        .acc,
+        .impl,
+        => @as(u8, 0),
+        .imm,
+        .rel,
+        .x_ind,
+        .ind_y,
+        .zp,
+        .zp_x,
+        .zp_y,
+        => @as(u8, 1),
+        .abs,
+        .abs_x,
+        .abs_y,
+        .ind,
+        => @as(u8, 2),
     };
 }
 
@@ -36,10 +49,10 @@ pub inline fn fetch(memory: []const u8) !Inst {
         .abs_x,
         .abs_y,
         .ind,
-        .x_ind,
-        .ind_y,
         => .{ .addr = readIntSliceLittle(u16, memory[1..]) },
 
+        .x_ind,
+        .ind_y,
         .zp,
         .zp_x,
         .zp_y,

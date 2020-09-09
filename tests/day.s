@@ -20,9 +20,6 @@
 TMP .EQU $6
 
 	.ORG $8000
-	LDY #120
-	LDX #9
-	LDA #7
 WEEKDAY:
 	CPX #3          ; Year starts in March to bypass
 	BCS MARCH       ; leap year problem

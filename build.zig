@@ -1,4 +1,6 @@
-const Builder = @import("std").build.Builder;
+const std = @import("std");
+const test_runner = @import("test_runner.zig");
+const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
     const target = b.standardTargetOptions(.{});
@@ -17,24 +19,20 @@ pub fn build(b: *Builder) void {
 
     const test_cmd = b.step("test", "Run tests on files in tests/");
 
-    const test_files = [_][]const u8{
-        "tests/simple",
-        "tests/day",
-    };
-
-    inline for (test_files) |file| {
+    inline for (test_runner.tests) |t| {
+        const filename = t.filename;
         const run_vasm = b.addSystemCommand(&[_][]const u8{
             "vasm6502_oldstyle",
             "-Fbin",
-            file ++ ".s",
+            "tests/" ++ filename ++ ".s",
             "-dotdir",
             "-o",
-            file ++ ".bin",
+            "tests/" ++ filename ++ ".bin",
         });
         run_vasm.stdout_action = .ignore;
         test_cmd.dependOn(&run_vasm.step);
     }
 
-    const test_step = b.addTest("test.zig");
+    const test_step = b.addTest("test_runner.zig");
     test_cmd.dependOn(&test_step.step);
 }
