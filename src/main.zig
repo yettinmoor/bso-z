@@ -5,7 +5,7 @@ const print = std.debug.print;
 
 const Inst = @import("Inst.zig");
 
-const Cpu = struct {
+pub const Cpu = struct {
     pc: u16,
     a: u8,
     x: u8,
@@ -55,10 +55,12 @@ const Cpu = struct {
         self.sr.set(0);
     }
 
-    pub fn run(self: *Cpu) Error!void {
+    pub fn run(self: *Cpu, opts: RunOptions) Error!void {
         while (true) {
             const inst = try self.fetch();
-            defer self.printState(inst);
+            defer if (opts.print != .no) {
+                self.printState(inst, opts);
+            };
             self.step(inst) catch |err| switch (err) {
                 // TODO: for now, we exit when returning from a subroutine
                 // when no return address is on the stack
@@ -380,12 +382,15 @@ const Cpu = struct {
     }
 
     /// For debug printing
-    pub fn printState(self: *Cpu, inst: Inst) void {
+    pub fn printState(self: *Cpu, inst: Inst, opts: RunOptions) void {
         // PC
         print("{x:0<4}: ", .{self.pc - inst.len});
 
         // Op
-        print("\x1b[33m{}\x1b[0m ", .{inst.op.name()});
+        if (opts.print == .yes_color)
+            print("\x1b[33m{}\x1b[0m ", .{inst.op.name()})
+        else
+            print("{} ", .{inst.op.name()});
 
         // Addressing mode and operand
         const operand = inst.operand;
@@ -409,7 +414,10 @@ const Cpu = struct {
                 .zp_y => writer.print("${x:0<2},Y", .{operand.addr}),
             };
             ok catch unreachable;
-            print("\x1b[34m{: <10}\x1b[0m", .{fbs.getWritten()});
+            if (opts.print == .yes_color)
+                print("\x1b[34m{: <10}\x1b[0m", .{fbs.getWritten()})
+            else
+                print("{: <10}", .{fbs.getWritten()});
         }
 
         // Dereference address
@@ -423,10 +431,19 @@ const Cpu = struct {
 
         // Registers
         print(" | ", .{});
-        print("{}A{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.a });
-        print("{}X{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.x });
-        print("{}Y{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.y });
-        print("{}SP{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.sp });
+        if (opts.print == .yes_color) {
+            print("{}A{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.a });
+            print("{}X{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.x });
+            print("{}Y{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.y });
+            print("{}SP{}: {x:0<2} | ", .{ "\x1b[32m", "\x1b[0m", self.sp });
+        } else {
+            print("A: {x:0<2} | X: {x:0<2} | Y: {x:0<2} | SP: {x:0<2} | ", .{
+                self.a,
+                self.x,
+                self.y,
+                self.sp,
+            });
+        }
 
         // Status register
         if (self.sr.negative == 1) print("N", .{}) else print("-", .{});
@@ -491,6 +508,12 @@ const Cpu = struct {
         return 0;
     }
 
+    const RunOptions = struct {
+        print: PrintOptions = .no,
+
+        const PrintOptions = enum { no, yes, yes_color };
+    };
+
     const Error = error{
         InvalidOpcode,
         StackUnderflowReturnFromSubroutine,
@@ -505,5 +528,5 @@ pub fn main() anyerror!void {
     _ = try file.read(memory[entry..]);
 
     var cpu = Cpu.init(&memory, entry);
-    try cpu.run();
+    try cpu.run(.{ .print = .yes });
 }

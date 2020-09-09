@@ -2,18 +2,18 @@
 
 ; How to compute the day of the week in 6502 assembly.
 ; By Paul Guertin (pg@sff.net), 18 August 2000.
-* This routine works for any date from 1900-03-01 to 2155-12-31.
-* No range checking is done, so validate input before calling.
-*
-* I use the formula
-*     Weekday = (day + offset[month] + year + year/4 + fudge) mod 7
-* where the value of fudge depends on the century.
-*
-* Input: Y = year (0=1900, 1=1901, ..., 255=2155)
-*        X = month (1=Jan, 2=Feb, ..., 12=Dec)
-*        A = day (1 to 31)
-*
-* Output: Weekday in A (0=Sunday, 1=Monday, ..., 6=Saturday)
+; This routine works for any date from 1900-03-01 to 2155-12-31.
+; No range checking is done, so validate input before calling.
+;
+; I use the formula
+;     Weekday = (day + offset[month] + year + year/4 + fudge) mod 7
+; where the value of fudge depends on the century.
+;
+; Input: Y = year (0=1900, 1=1901, ..., 255=2155)
+;        X = month (1=Jan, 2=Feb, ..., 12=Dec)
+;        A = day (1 to 31)
+;
+; Output: Weekday in A (0=Sunday, 1=Monday, ..., 6=Saturday)
 
 ; (with some adjustments by me, Nicolas)
 
